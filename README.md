@@ -12,6 +12,12 @@ Na primeira vez o Windows pode mostrar "O Windows protegeu o computador" (o prog
 
 Precisa de Windows 10 (versão 2004 ou mais nova) ou Windows 11.
 
+### Assistir pelo celular
+
+**[📱 Abrir o Isekai no celular](https://lucas-amaralz.github.io/isekai/)**: funciona no Android e no iPhone, sem instalar. Coloque o código da sala e toque em quem está transmitindo. Pelo celular dá para assistir; transmitir é só pelo programa de Windows.
+
+Dica: no menu do navegador, **Adicionar à tela inicial** deixa o Isekai com ícone de app.
+
 ## Como usar
 
 1. Coloque seu nome e clique em **Criar sala**. Clique no código no topo para copiar e mande para o pessoal.

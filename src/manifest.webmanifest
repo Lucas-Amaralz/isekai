@@ -1,0 +1,12 @@
+{
+  "name": "Isekai",
+  "short_name": "Isekai",
+  "description": "Assistir filme e série com os amigos.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0a1120",
+  "theme_color": "#0a1120",
+  "icons": [
+    { "src": "art/icone.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

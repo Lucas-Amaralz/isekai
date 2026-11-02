@@ -1,6 +1,6 @@
 {
   "name": "isekai",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "Salas para assistir filme e série juntos, com o som de um programa só.",
   "main": "main.js",
   "scripts": {
@@ -25,7 +25,6 @@
       "main.js",
       "preload.js",
       "src/**/*",
-      "node_modules/peerjs/**/*",
       "package.json",
       "turn.json"
     ],
@@ -36,7 +35,8 @@
       }
     ],
     "win": {
-      "target": "portable"
+      "target": "portable",
+      "icon": "src/art/icone.png"
     },
     "portable": {
       "artifactName": "Isekai.exe"

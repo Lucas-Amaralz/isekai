@@ -10,6 +10,8 @@ const QUALITIES = {
 let quality = QUALITIES['720'];
 const AUDIO_BITRATE = 256_000;
 const CONNECT_TIMEOUT = 20000;
+// No site (celular ou navegador) dá para assistir; transmitir só no programa de Windows.
+const CAN_SHARE = typeof window.isekai.getSources === 'function';
 const PEER_OPTIONS = {
   debug: 1,
   config: {
@@ -212,6 +214,7 @@ function enterRoom() {
   ui.room.hidden = false;
   document.body.classList.add('in-room');
   ui.roomCode.textContent = roomCode;
+  ui.shareBtn.hidden = !CAN_SHARE;
   renderMembers();
   showStage();
   clearInterval(heartbeat);
@@ -414,8 +417,8 @@ function setupMedia(p) {
     call.on('stream', (stream) => {
       if (incoming !== call) return;
       ui.video.srcObject = stream;
-      ui.video.muted = false;
-      ui.video.play().catch(() => {});
+      ui.video.muted = ui.video.dataset.muted === '1';
+      playVideo();
       showStage();
       startStats(call);
     });
@@ -438,7 +441,9 @@ function showStage() {
     ui.watchTitle.textContent = 'Nenhuma transmissão selecionada';
     msg = memberList.some((m) => m.streaming)
       ? 'Escolha uma pessoa que esteja transmitindo para assistir.'
-      : 'Ninguém está transmitindo agora. Clique em "Compartilhar tela" para começar.';
+      : CAN_SHARE
+        ? 'Ninguém está transmitindo agora. Clique em "Compartilhar tela" para começar.'
+        : 'Ninguém está transmitindo agora. Quando alguém compartilhar a tela pelo PC, aparece aqui.';
   } else if (watching === myId) {
     ui.watchTitle.textContent = 'Sua transmissão (prévia sem som)';
     if (localStream) video = localStream;
@@ -452,7 +457,7 @@ function showStage() {
   if (video) {
     if (ui.video.srcObject !== video) ui.video.srcObject = video;
     ui.video.muted = watching === myId || ui.video.dataset.muted === '1';
-    if (ui.video.paused) ui.video.play().catch(() => {});
+    if (ui.video.paused) playVideo();
     ui.video.hidden = false;
     ui.controls.hidden = watching === myId;
     ui.stageEmpty.hidden = true;
@@ -506,9 +511,31 @@ function toggleMute(muted) {
   ui.video.dataset.muted = muted ? '1' : '';
   ui.muteBtn.textContent = muted ? '🔇' : '🔊';
 }
+// Celular e navegador não deixam tocar com som sem um toque na tela: começa mudo e pede para ligar o som.
+function playVideo() {
+  ui.video.play().catch(() => {
+    if (ui.video.muted) return;
+    toggleMute(true);
+    ui.video.play().catch(() => {});
+    toast('Toque em 🔇 para ligar o som.', 6000);
+  });
+}
+
 function toggleFullscreen() {
-  if (document.fullscreenElement) document.exitFullscreen();
-  else ui.stage.requestFullscreen().catch(() => {});
+  const fsElement = document.fullscreenElement || document.webkitFullscreenElement;
+  if (fsElement) {
+    (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    return;
+  }
+  const request = ui.stage.requestFullscreen || ui.stage.webkitRequestFullscreen;
+  if (request) {
+    Promise.resolve(request.call(ui.stage))
+      .then(() => screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape'))
+      .catch(() => {});
+  } else if (ui.video.webkitEnterFullscreen) {
+    // iPhone: só o próprio vídeo entra em tela cheia.
+    ui.video.webkitEnterFullscreen();
+  }
 }
 ui.fullBtn.onclick = toggleFullscreen;
 ui.stage.addEventListener('dblclick', () => { if (!ui.video.hidden) toggleFullscreen(); });
