@@ -1,6 +1,7 @@
 // Isekai: salas para assistir filme e série juntos, com a tela e o som de UM programa só.
 const { app, BrowserWindow, ipcMain, desktopCapturer, session, nativeTheme, clipboard } = require('electron');
 const { spawn, execFile } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 
 // O capturador de som fica em resources/ no desenvolvimento e ao lado do app no .exe empacotado.
@@ -15,6 +16,39 @@ let audioProc = null;
 // Permite abrir duas cópias no mesmo PC para testar (cada uma com seu perfil).
 if (process.env.ISEKAI_PROFILE) app.setPath('userData', path.join(app.getPath('temp'), 'isekai-' + process.env.ISEKAI_PROFILE));
 
+// Modo compatibilidade: em alguns PCs a placa de vídeo (ou o driver dela) deixa a janela toda preta.
+// Quando isso acontece o Isekai liga o modo sozinho, reabre sem usar a placa e lembra disso nas próximas vezes.
+const compatFile = path.join(app.getPath('userData'), 'modo-compatibilidade');
+const compat = process.argv.includes('--compat') || fs.existsSync(compatFile);
+if (compat) app.disableHardwareAcceleration();
+
+function restartInCompat(reason) {
+  if (compat) return;
+  console.warn('modo compatibilidade:', reason);
+  try {
+    fs.mkdirSync(path.dirname(compatFile), { recursive: true });
+    fs.writeFileSync(compatFile, reason + '\n');
+  } catch {}
+  app.relaunch();
+  app.exit(0);
+}
+
+app.on('child-process-gone', (_e, details) => {
+  if (details.type === 'GPU' && details.reason !== 'clean-exit') restartInCompat('a placa de vídeo travou (' + details.reason + ')');
+});
+
+// A tela inicial tem a arte do campo de flores: se depois de abrir a janela estiver toda preta, a placa não está desenhando.
+async function checkWindowDrawn() {
+  if (compat || !win || win.isDestroyed() || win.isMinimized() || !win.isVisible()) return;
+  let img = null;
+  try { img = await win.webContents.capturePage(); } catch {}
+  if (!img || img.isEmpty()) return restartInCompat('a janela não desenhou');
+  const px = img.toBitmap();
+  let brightest = 0;
+  for (let i = 0; i < px.length; i += 4 * 97) brightest = Math.max(brightest, px[i], px[i + 1], px[i + 2]);
+  if (brightest < 24) restartInCompat('a janela abriu toda preta');
+}
+
 // Sem isso o Chromium segura o vídeo quando a janela fica minimizada ou atrás do player.
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-background-timer-throttling');
@@ -27,7 +61,7 @@ function createWindow() {
     height: 760,
     minWidth: 900,
     minHeight: 560,
-    title: 'Isekai',
+    title: compat ? 'Isekai (modo compatibilidade)' : 'Isekai',
     backgroundColor: '#070a12',
     autoHideMenuBar: true,
     webPreferences: {
@@ -38,6 +72,9 @@ function createWindow() {
     },
   });
   win.loadFile(path.join(__dirname, 'src', 'index.html'));
+  win.webContents.once('did-finish-load', () => setTimeout(checkWindowDrawn, 4000));
+  // O título da página sobrescreveria o aviso do modo compatibilidade.
+  win.on('page-title-updated', (e) => e.preventDefault());
   win.on('closed', () => { stopAudio(); win = null; });
 }
 
