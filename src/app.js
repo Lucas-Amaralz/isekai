@@ -152,9 +152,14 @@ async function createRoom() {
     broadcastMembers();
   });
   peer.on('connection', (conn) => {
-    conn.on('data', (msg) => ownerHandle(conn.peer, msg, conn));
-    conn.on('close', () => removeMember(conn.peer));
-    conn.on('error', () => removeMember(conn.peer));
+    acceptMember(conn);
+    // Tem internet que recebe conexão mas não consegue abrir uma: se a de quem entrou não abrir, eu ligo de volta.
+    const p = peer;
+    setTimeout(() => {
+      if (conn.open || members.has(conn.peer) || p !== peer || p.destroyed) return;
+      const back = p.connect(conn.peer, { reliable: true, metadata: { isekai: 'reverse' } });
+      if (back) acceptMember(back);
+    }, 5000);
   });
   peer.on('error', (err) => {
     if (err.type === 'unavailable-id' && !inRoom) {
@@ -166,6 +171,14 @@ async function createRoom() {
   setupMedia(peer);
 }
 
+function acceptMember(conn) {
+  conn.on('data', (msg) => ownerHandle(conn.peer, msg, conn));
+  // Só tira da sala se for a ligação que a pessoa está usando (pode ter uma de ida e uma de volta).
+  const gone = () => { const m = members.get(conn.peer); if (m && m.conn === conn) removeMember(conn.peer); };
+  conn.on('close', gone);
+  conn.on('error', gone);
+}
+
 async function joinRoom(code) {
   const options = await peerOptions();
   startConnectTimer('Não consegui falar com o servidor das salas. Confere sua internet e tenta de novo.');
@@ -173,20 +186,33 @@ async function joinRoom(code) {
   peer.on('open', (id) => {
     myId = id;
     startConnectTimer('Achei a sala, mas não consegui conectar no PC de quem criou. A internet de um de vocês está bloqueando a conexão direta.');
-    const conn = peer.connect(ROOM_PREFIX + code, { reliable: true });
-    conn.on('open', () => {
-      ownerConn = conn;
-      roomCode = code;
-      isOwner = false;
-      lastOwnerMsg = Date.now();
-      conn.send({ t: 'hello', name: myName });
-      enterRoom();
-    });
-    conn.on('data', (msg) => { lastOwnerMsg = Date.now(); memberHandle(msg); });
-    conn.on('close', () => roomClosed('A sala foi fechada por quem criou.'));
+    useOwnerConn(peer.connect(ROOM_PREFIX + code, { reliable: true }), code);
+  });
+  // A ligação de volta do dono, para quando a minha não consegue sair daqui.
+  peer.on('connection', (conn) => {
+    if (conn.peer === ROOM_PREFIX + code && conn.metadata && conn.metadata.isekai === 'reverse') useOwnerConn(conn, code);
+    else conn.close();
   });
   peer.on('error', handlePeerError);
   setupMedia(peer);
+}
+
+function useOwnerConn(conn, code) {
+  conn.on('open', () => {
+    if (ownerConn) { conn.close(); return; }
+    ownerConn = conn;
+    roomCode = code;
+    isOwner = false;
+    lastOwnerMsg = Date.now();
+    conn.send({ t: 'hello', name: myName });
+    enterRoom();
+  });
+  conn.on('data', (msg) => {
+    if (conn !== ownerConn) return;
+    lastOwnerMsg = Date.now();
+    memberHandle(msg);
+  });
+  conn.on('close', () => { if (conn === ownerConn) roomClosed('A sala foi fechada por quem criou.'); });
 }
 
 function handlePeerError(err) {
@@ -241,6 +267,9 @@ function tick() {
     const target = memberList.find((m) => m.id === watching);
     if (target && target.streaming) askToWatch(watching);
   }
+  // Se a ligação com o servidor das salas cair, o código some para quem tenta entrar
+  // (e as chamadas novas não chegam): registra de novo com o mesmo id.
+  if (peer && peer.disconnected && !peer.destroyed) peer.reconnect();
 }
 
 function leaveRoom() {
@@ -410,26 +439,67 @@ function closeIncoming() {
 
 function setupMedia(p) {
   p.on('call', (call) => {
+    if (call.metadata && call.metadata.isekai === 'reverse') return answerReverse(call);
     if (call.peer !== watching) { call.close(); return; }
-    closeIncoming();
-    incoming = call;
     call.answer(undefined, { sdpTransform: tuneSdp });
-    call.on('stream', (stream) => {
-      if (incoming !== call) return;
-      ui.video.srcObject = stream;
-      ui.video.muted = ui.video.dataset.muted === '1';
-      playVideo();
-      showStage();
-      startStats(call);
-    });
-    call.on('close', () => {
-      if (incoming !== call) return;
-      incoming = null;
-      clearInterval(statsTimer);
-      ui.stats.textContent = '';
-      showStage();
-    });
+    watchCall(call);
   });
+}
+
+function watchCall(call) {
+  closeIncoming();
+  incoming = call;
+  call.on('stream', (stream) => {
+    if (incoming !== call) return;
+    ui.video.srcObject = stream;
+    ui.video.muted = ui.video.dataset.muted === '1';
+    playVideo();
+    showStage();
+    startStats(call);
+  });
+  call.on('close', () => {
+    if (incoming !== call) return;
+    incoming = null;
+    clearInterval(statsTimer);
+    ui.stats.textContent = '';
+    showStage();
+  });
+  // Se o vídeo não conectar, tento ao contrário: eu ligo para quem transmite. Se essa também
+  // falhar, o tick pede do jeito normal de novo, e assim vai alternando.
+  setTimeout(() => {
+    const pc = call.peerConnection;
+    if (incoming !== call || (pc && pc.connectionState === 'connected')) return;
+    const target = call.peer;
+    closeIncoming();
+    showStage();
+    if (watching === target && !(call.metadata && call.metadata.isekai === 'reverse')) reverseCall(target);
+  }, 8000);
+}
+
+function reverseCall(target) {
+  const call = peer.call(target, placeholderStream(), { metadata: { isekai: 'reverse' }, sdpTransform: tuneSdp });
+  if (call) watchCall(call);
+}
+
+// Faixas paradas só para a ligação ao contrário ter lugar de vídeo e som para quem transmite responder.
+let placeholder = null;
+function placeholderStream() {
+  if (!placeholder) {
+    const canvas = Object.assign(document.createElement('canvas'), { width: 2, height: 2 });
+    canvas.getContext('2d').fillRect(0, 0, 2, 2);
+    const video = canvas.captureStream(0).getVideoTracks()[0];
+    const audio = new AudioContext().createMediaStreamDestination().stream.getAudioTracks()[0];
+    placeholder = new MediaStream([video, audio]);
+  }
+  return placeholder;
+}
+
+// Quem transmite recebendo a ligação ao contrário: responde com a transmissão.
+function answerReverse(call) {
+  if (!localStream) { call.close(); return; }
+  closeOutgoing(call.peer);
+  call.answer(localStream, { sdpTransform: tuneSdp });
+  trackOutgoing(call.peer, call);
 }
 
 // O que aparece no palco depende de quem está selecionado e se o vídeo já chegou.
@@ -738,7 +808,10 @@ function updateShareUi() {
 function callViewer(viewerId) {
   closeOutgoing(viewerId);
   const call = peer.call(viewerId, localStream, { sdpTransform: tuneSdp });
-  if (!call) return;
+  if (call) trackOutgoing(viewerId, call);
+}
+
+function trackOutgoing(viewerId, call) {
   outgoing.set(viewerId, call);
   const pc = call.peerConnection;
   const onState = () => { if (pc.connectionState === 'connected') tuneSenders(pc); };
