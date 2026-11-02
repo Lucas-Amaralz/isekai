@@ -1,7 +1,8 @@
-// Isekai: a sala vive no PC de quem criou (o dono). Todo mundo se conecta a ele para saber quem está na sala
-// e quem está transmitindo; o vídeo vai direto de quem transmite para quem escolheu assistir.
+// Isekai: uma sala só, a dos amigos. Quem entra primeiro segura a sala (o dono) e todo mundo se conecta a ele
+// para saber quem está na sala e quem está transmitindo; se o dono sair, outro assume sozinho.
+// O vídeo vai direto de quem transmite para quem escolheu assistir.
 const ROOM_PREFIX = 'isekai-sala-';
-const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const ROOM = 'amigos-do-lucas';
 // 720p é o padrão (leve para qualquer PC e internet); quem quiser escolhe 1080p na hora de compartilhar.
 const QUALITIES = {
   '720': { width: 1280, height: 720, bitrate: 5_000_000 },
@@ -37,18 +38,15 @@ let connectTimer = null;
 function startConnectTimer(text) {
   clearTimeout(connectTimer);
   connectTimer = setTimeout(() => {
-    if (inRoom) return;
-    if (peer) { peer.destroy(); peer = null; }
-    setHomeBusy(false);
-    showHomeError(text);
+    if (!inRoom) enterFailed(text);
   }, CONNECT_TIMEOUT);
 }
 
 const $ = (id) => document.getElementById(id);
 const ui = {
-  home: $('home'), room: $('room'), nameInput: $('nameInput'), codeInput: $('codeInput'),
-  createBtn: $('createBtn'), joinBtn: $('joinBtn'), homeError: $('homeError'),
-  roomCode: $('roomCode'), peopleCount: $('peopleCount'), shareBtn: $('shareBtn'), shareStatus: $('shareStatus'),
+  home: $('home'), room: $('room'), nameInput: $('nameInput'),
+  enterBtn: $('enterBtn'), homeError: $('homeError'),
+  peopleCount: $('peopleCount'), shareBtn: $('shareBtn'), shareStatus: $('shareStatus'),
   leaveBtn: $('leaveBtn'), memberList: $('memberList'), watchTitle: $('watchTitle'), stats: $('stats'),
   stage: $('stage'), video: $('video'), stageMsg: $('stageMsg'), stageEmpty: $('stageEmpty'), controls: $('controls'),
   muteBtn: $('muteBtn'), volume: $('volume'), fullBtn: $('fullBtn'),
@@ -59,7 +57,6 @@ const ui = {
 let peer = null;
 let myId = null;
 let myName = '';
-let roomCode = '';
 let isOwner = false;
 let ownerConn = null;
 let inRoom = false;
@@ -104,49 +101,52 @@ function showHomeError(text) {
 }
 
 function setHomeBusy(busy) {
-  ui.createBtn.disabled = busy;
-  ui.joinBtn.disabled = busy;
+  ui.enterBtn.disabled = busy;
 }
 
-ui.createBtn.onclick = () => {
+ui.enterBtn.onclick = () => {
   const name = readName();
   if (!name) return;
   myName = name;
   showHomeError('');
   setHomeBusy(true);
-  createRoom();
+  enterSala();
 };
 
-ui.joinBtn.onclick = () => {
-  const name = readName();
-  if (!name) return;
-  const code = ui.codeInput.value.trim().toUpperCase();
-  if (code.length !== 6) return showHomeError('O código da sala tem 6 letras.');
-  myName = name;
-  showHomeError('');
-  setHomeBusy(true);
-  joinRoom(code);
-};
+ui.nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') ui.enterBtn.click(); });
 
-ui.codeInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') ui.joinBtn.click(); });
-ui.nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') ui.createBtn.click(); });
+// ---------- Entrar ----------
 
-function randomCode() {
-  const bytes = crypto.getRandomValues(new Uint8Array(6));
-  return Array.from(bytes, (b) => CODE_CHARS[b % CODE_CHARS.length]).join('');
+// Tenta entrar na sala; se ninguém estiver segurando, eu seguro. Se dois tentarem segurar juntos,
+// quem perde entra como convidado. O limite evita ficar trocando para sempre.
+let enterTries = 0;
+function enterSala() {
+  enterTries = 0;
+  joinRoom(ROOM);
 }
 
-// ---------- Criar e entrar ----------
+function switchEnter(fn) {
+  if (peer) { peer.destroy(); peer = null; }
+  if (++enterTries > 6) return enterFailed('Não consegui entrar na sala. Tenta de novo daqui a pouco.');
+  fn(ROOM);
+}
 
-async function createRoom() {
-  const code = randomCode();
+function enterFailed(text) {
+  clearTimeout(connectTimer);
+  if (peer) { peer.destroy(); peer = null; }
+  if (localStream) stopShare(true);
+  showHome();
+  setHomeBusy(false);
+  showHomeError(text);
+}
+
+async function createRoom(code) {
   const options = await peerOptions();
   startConnectTimer('Não consegui falar com o servidor das salas. Confere sua internet e tenta de novo.');
   peer = new Peer(ROOM_PREFIX + code, options);
   peer.on('open', (id) => {
     myId = id;
     isOwner = true;
-    roomCode = code;
     members.set(myId, { conn: null, name: myName, streaming: false, lastSeen: Date.now() });
     enterRoom();
     broadcastMembers();
@@ -162,9 +162,11 @@ async function createRoom() {
     }, 5000);
   });
   peer.on('error', (err) => {
-    if (err.type === 'unavailable-id' && !inRoom) {
-      peer.destroy();
-      return createRoom();
+    if (err.type === 'unavailable-id') {
+      // Alguém segurou a sala antes de mim: entro como convidado.
+      if (!inRoom) return switchEnter(joinRoom);
+      // Caí do servidor e, nesse meio-tempo, outro assumiu a sala: junto todo mundo na dele.
+      return rejoin('A sala mudou de lugar. Reconectando...');
     }
     handlePeerError(err);
   });
@@ -187,6 +189,9 @@ async function joinRoom(code) {
     myId = id;
     startConnectTimer('Achei a sala, mas não consegui conectar no PC de quem criou. A internet de um de vocês está bloqueando a conexão direta.');
     useOwnerConn(peer.connect(ROOM_PREFIX + code, { reliable: true }), code);
+    // Se a sala acabou de trocar de dono, o pedido pode ter ido para quem já saiu: tento de novo.
+    const p = peer;
+    setTimeout(() => { if (!inRoom && peer === p) switchEnter(joinRoom); }, 12000);
   });
   // A ligação de volta do dono, para quando a minha não consegue sair daqui.
   peer.on('connection', (conn) => {
@@ -201,7 +206,6 @@ function useOwnerConn(conn, code) {
   conn.on('open', () => {
     if (ownerConn) { conn.close(); return; }
     ownerConn = conn;
-    roomCode = code;
     isOwner = false;
     lastOwnerMsg = Date.now();
     conn.send({ t: 'hello', name: myName });
@@ -212,18 +216,16 @@ function useOwnerConn(conn, code) {
     lastOwnerMsg = Date.now();
     memberHandle(msg);
   });
-  conn.on('close', () => { if (conn === ownerConn) roomClosed('A sala foi fechada por quem criou.'); });
+  conn.on('close', () => { if (conn === ownerConn) rejoin('Quem segurava a sala saiu. Reconectando...'); });
 }
 
 function handlePeerError(err) {
   console.warn('peer', err.type, err);
   if (!inRoom) {
-    clearTimeout(connectTimer);
-    setHomeBusy(false);
-    if (err.type === 'peer-unavailable') showHomeError('Não achei essa sala. Confere o código.');
-    else if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error') showHomeError('Sem conexão com o servidor. Confere sua internet e tenta de novo.');
-    else showHomeError('Não deu para conectar (' + err.type + ').');
-    if (peer) { peer.destroy(); peer = null; }
+    // Ninguém segurando a sala: eu seguro.
+    if (err.type === 'peer-unavailable') return switchEnter(createRoom);
+    if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error') enterFailed('Sem conexão com o servidor. Confere sua internet e tenta de novo.');
+    else enterFailed('Não deu para conectar (' + err.type + ').');
     return;
   }
   // Na sala, "peer-unavailable" é alguém que saiu no meio de uma chamada: a lista se ajusta sozinha.
@@ -239,12 +241,13 @@ function enterRoom() {
   ui.home.hidden = true;
   ui.room.hidden = false;
   document.body.classList.add('in-room');
-  ui.roomCode.textContent = roomCode;
   ui.shareBtn.hidden = !CAN_SHARE;
   renderMembers();
   showStage();
   clearInterval(heartbeat);
   heartbeat = setInterval(tick, 4000);
+  // Voltando depois que a sala trocou de dono: continua transmitindo.
+  if (localStream) { sendToOwner({ t: 'streaming', on: true }); updateShareUi(); }
 }
 
 // Dono: avisa a lista a cada volta e tira quem sumiu. Os outros: dão sinal de vida e percebem se o dono caiu.
@@ -260,7 +263,7 @@ function tick() {
     broadcastMembers();
   } else if (ownerConn) {
     ownerConn.send({ t: 'ping' });
-    if (Date.now() - lastOwnerMsg > 15000) roomClosed('Perdi a conexão com a sala.');
+    if (Date.now() - lastOwnerMsg > 15000) rejoin('Perdi a conexão com a sala. Reconectando...');
   }
   // Pede de novo se a pessoa voltou a transmitir ou se o primeiro pedido se perdeu.
   if (watching && watching !== myId && !incoming && Date.now() - watchAskedAt > 8000) {
@@ -279,30 +282,43 @@ function leaveRoom() {
   setTimeout(resetAll, isOwner ? 300 : 0);
 }
 
-function roomClosed(text) {
+// O dono saiu ou caiu: entro de novo sem sair da tela. Um de nós assume a sala; quem transmitia continua
+// transmitindo e quem assistia volta a assistir a mesma pessoa (pelo nome, porque o id de quem assume muda).
+let rewatchName = null;
+function rejoin(text) {
   if (!inRoom) return;
   toast(text);
-  resetAll();
+  const target = memberList.find((m) => m.id === watching);
+  rewatchName = target && target.id !== myId ? target.name : null;
+  resetAll(true);
+  // Espera um pouco diferente para cada um, para não tentarem segurar a sala todos ao mesmo tempo.
+  setTimeout(() => { if (!inRoom && !peer) enterSala(); }, 300 + Math.random() * 1500);
 }
 
-function resetAll() {
+function resetAll(keepShare) {
   inRoom = false;
   clearInterval(heartbeat);
-  stopShare(true);
+  if (keepShare) for (const id of [...outgoing.keys()]) closeOutgoing(id);
+  else stopShare(true);
   stopWatching();
   members.clear();
   memberList = [];
   ownerConn = null;
   isOwner = false;
   if (peer) { peer.destroy(); peer = null; }
-  ui.room.hidden = true;
-  ui.home.hidden = false;
-  document.body.classList.remove('in-room', 'watching');
+  if (keepShare) { renderMembers(); return; }
+  rewatchName = null;
+  showHome();
   setHomeBusy(false);
 }
 
+function showHome() {
+  ui.room.hidden = true;
+  ui.home.hidden = false;
+  document.body.classList.remove('in-room', 'watching');
+}
+
 ui.leaveBtn.onclick = leaveRoom;
-ui.roomCode.onclick = () => { window.isekai.copy(roomCode); toast('Código copiado! Manda pro pessoal.'); };
 
 // ---------- Mensagens ----------
 
@@ -359,6 +375,10 @@ function memberHandle(msg) {
         if (!target) stopWatching();
         else if (!target.streaming && incoming) { closeIncoming(); showStage(); }
       }
+      if (rewatchName && !watching) {
+        const again = memberList.find((m) => m.streaming && m.name === rewatchName && m.id !== myId);
+        if (again) { rewatchName = null; selectMember(again.id); }
+      }
       renderMembers();
       showStage();
       break;
@@ -369,7 +389,7 @@ function memberHandle(msg) {
       closeOutgoing(msg.from);
       break;
     case 'closed':
-      roomClosed('A sala foi fechada por quem criou.');
+      rejoin('Quem segurava a sala saiu. Reconectando...');
       break;
   }
 }

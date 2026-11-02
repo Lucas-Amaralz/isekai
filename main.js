@@ -208,9 +208,31 @@ function stopAudio() {
   setTimeout(() => { try { proc.kill(); } catch {} }, 1000);
 }
 
+// Atualização: procura versão nova na Release do GitHub, baixa em segundo plano e pergunta se pode reiniciar.
+function setupUpdates() {
+  if (!app.isPackaged) return;
+  const { autoUpdater } = require('electron-updater');
+  autoUpdater.on('update-downloaded', async (info) => {
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'info',
+      title: 'Isekai',
+      message: 'Chegou o Isekai ' + info.version + '.',
+      detail: 'Reiniciar agora para atualizar? Se estiver no meio de um filme, pode deixar para depois: atualiza quando você fechar o Isekai.',
+      buttons: ['Reiniciar agora', 'Depois'],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (response === 0) autoUpdater.quitAndInstall(true, true);
+  });
+  autoUpdater.on('error', (err) => console.warn('update', err && err.message));
+  autoUpdater.checkForUpdates().catch(() => {});
+  setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 4 * 60 * 60 * 1000);
+}
+
 app.whenReady().then(() => {
   setupCapture();
   createWindow();
+  setupUpdates();
 });
 
 app.on('window-all-closed', () => {

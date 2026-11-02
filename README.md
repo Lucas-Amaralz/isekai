@@ -1,12 +1,12 @@
 # Isekai
 
-Programa de Windows para assistir filme e série com os amigos: cada um entra numa sala com um código, quem vai passar o filme compartilha a janela do player e **só o som desse programa** vai para a sala. A voz da call no Discord não vaza junto.
+Programa de Windows para assistir filme e série com os amigos: todo mundo entra na mesma sala, quem vai passar o filme compartilha a janela do player e **só o som desse programa** vai para a sala. A voz da call no Discord não vaza junto.
 
 ![Tela inicial](docs/inicio.png)
 
 ## Baixar
 
-**[⬇ Baixar o Isekai.exe](https://github.com/Lucas-Amaralz/isekai/releases/latest/download/Isekai.exe)**: não precisa instalar, é só abrir.
+**[⬇ Baixar o instalador do Isekai](https://github.com/Lucas-Amaralz/isekai/releases/latest/download/Isekai-Setup.exe)**: instala sem pedir administrador e, depois disso, **se atualiza sozinho** (quando sai versão nova, ele baixa e pergunta se pode reiniciar).
 
 Na primeira vez o Windows pode mostrar "O Windows protegeu o computador" (o programa não tem assinatura paga). Clique em **Mais informações → Executar assim mesmo**.
 
@@ -14,16 +14,15 @@ Precisa de Windows 10 (versão 2004 ou mais nova) ou Windows 11.
 
 ### Assistir pelo celular
 
-**[📱 Abrir o Isekai no celular](https://lucas-amaralz.github.io/isekai/)**: funciona no Android e no iPhone, sem instalar. Coloque o código da sala e toque em quem está transmitindo. Pelo celular dá para assistir; transmitir é só pelo programa de Windows.
+**[📱 Abrir o Isekai no celular](https://lucas-amaralz.github.io/isekai/)**: funciona no Android e no iPhone, sem instalar. Coloque seu nome, entre na sala e toque em quem está transmitindo. Pelo celular dá para assistir; transmitir é só pelo programa de Windows.
 
 Dica: no menu do navegador, **Adicionar à tela inicial** deixa o Isekai com ícone de app.
 
 ## Como usar
 
-1. Coloque seu nome e clique em **Criar sala**. Clique no código no topo para copiar e mande para o pessoal.
-2. Os outros colocam o código e clicam em **Entrar**.
-3. Quem vai passar o filme clica em **Compartilhar tela**, escolhe a janela do player e, embaixo, de qual programa sai o som.
-4. Para assistir, clique no nome de quem está **Transmitindo**. Duplo clique no vídeo deixa em tela cheia.
+1. Coloque seu nome e clique em **Entrar na sala**. Só existe uma sala, a dos amigos: não tem código.
+2. Quem vai passar o filme clica em **Compartilhar tela**, escolhe a janela do player e, embaixo, de qual programa sai o som.
+3. Para assistir, clique no nome de quem está **Transmitindo**. Duplo clique no vídeo deixa em tela cheia.
 
 ![Sala](docs/sala.png)
 
@@ -33,7 +32,7 @@ A qualidade começa em 720p; com internet boa dá para escolher 1080p na hora de
 
 - Netflix, Prime e Disney+ no navegador aparecem pretos por causa da proteção contra cópia deles (o Discord tem o mesmo limite).
 - O Windows pode avisar "IsekaiAudio está usando o microfone": é como o Windows chama a captura de som de um programa. O microfone não é usado.
-- A sala fica no PC de quem criou: se essa pessoa fechar o Isekai, a sala acaba.
+- Quem entra primeiro segura a sala. Se essa pessoa fechar o Isekai, o de outro assume sozinho em alguns segundos, e quem estava transmitindo continua.
 
 ## Como funciona
 
@@ -50,6 +49,6 @@ npm run build-audio   # compila o capturador de som com o csc que já vem no Win
 npm start
 ```
 
-`npm run dist` gera o `dist/Isekai.exe` portátil.
+`npm run dist` gera o instalador `dist/Isekai-Setup.exe` e o `latest.yml` que o Isekai usa para se atualizar (os dois vão na Release, junto com o `.blockmap`).
 
 Arte de fundo gerada no Figma; fontes Cormorant Garamond e Nunito (SIL Open Font License).
