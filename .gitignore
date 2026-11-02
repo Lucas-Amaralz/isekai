@@ -1,0 +1,5 @@
+node_modules/
+dist/
+turn.json
+resources/
+*.exe

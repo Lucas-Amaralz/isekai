@@ -1,0 +1,48 @@
+{
+  "name": "isekai",
+  "version": "1.0.0",
+  "description": "Salas para assistir filme e série juntos, com o som de um programa só.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build-audio": "powershell -NoProfile -File helper/build.ps1",
+    "dist": "npm run build-audio && electron-builder --win portable"
+  },
+  "author": "Lucas Amaral",
+  "type": "commonjs",
+  "dependencies": {
+    "peerjs": "^1.5.5"
+  },
+  "devDependencies": {
+    "electron": "^45.2.1",
+    "electron-builder": "^26.18.0"
+  },
+  "productName": "Isekai",
+  "build": {
+    "appId": "com.lucasamaral.isekai",
+    "productName": "Isekai",
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "node_modules/peerjs/**/*",
+      "package.json",
+      "turn.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/IsekaiAudio.exe",
+        "to": "IsekaiAudio.exe"
+      }
+    ],
+    "win": {
+      "target": "portable"
+    },
+    "portable": {
+      "artifactName": "Isekai.exe"
+    },
+    "directories": {
+      "output": "dist"
+    }
+  }
+}

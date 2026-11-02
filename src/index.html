@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>Isekai</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="bg"></div>
+  <div id="lights" class="lights"></div>
+
+  <!-- Círculo mágico, desenhado uma vez e reaproveitado -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="magic" viewBox="0 0 200 200">
+      <g class="spin" fill="none" stroke="currentColor">
+        <circle cx="100" cy="100" r="96" stroke-width="1"/>
+        <circle cx="100" cy="100" r="88" stroke-width=".5" stroke-dasharray="2 5"/>
+        <g fill="currentColor" stroke="none">
+          <circle cx="100" cy="8" r="2.2"/><circle cx="146" cy="20.3" r="1.6"/><circle cx="179.7" cy="54" r="2.2"/>
+          <circle cx="192" cy="100" r="1.6"/><circle cx="179.7" cy="146" r="2.2"/><circle cx="146" cy="179.7" r="1.6"/>
+          <circle cx="100" cy="192" r="2.2"/><circle cx="54" cy="179.7" r="1.6"/><circle cx="20.3" cy="146" r="2.2"/>
+          <circle cx="8" cy="100" r="1.6"/><circle cx="20.3" cy="54" r="2.2"/><circle cx="54" cy="20.3" r="1.6"/>
+        </g>
+      </g>
+      <g class="spin-rev" fill="none" stroke="currentColor" stroke-width=".7">
+        <polygon points="100,22 167.5,139 32.5,139"/>
+        <polygon points="100,178 32.5,61 167.5,61"/>
+        <circle cx="100" cy="100" r="58"/>
+        <circle cx="100" cy="100" r="36" stroke-dasharray="1 3"/>
+      </g>
+    </symbol>
+  </svg>
+
+  <!-- Tela inicial -->
+  <section id="home" class="home">
+    <div class="home-card glass">
+      <svg class="magic"><use href="#magic"/></svg>
+      <h1 class="logo">Isekai</h1>
+      <p class="tagline">Um filme, uma série, a galera junta — e o som só do player.</p>
+
+      <label class="field">
+        <span>Seu nome</span>
+        <input id="nameInput" class="input" maxlength="24" placeholder="Como o pessoal vai te ver" autocomplete="off">
+      </label>
+
+      <button id="createBtn" class="btn primary wide">Criar sala</button>
+
+      <div class="divider">ou entre numa sala</div>
+
+      <div class="join-row">
+        <input id="codeInput" class="input" maxlength="6" placeholder="CÓDIGO" autocomplete="off" spellcheck="false">
+        <button id="joinBtn" class="btn">Entrar</button>
+      </div>
+      <p id="homeError" class="error" hidden></p>
+    </div>
+  </section>
+
+  <!-- Sala -->
+  <section id="room" class="room" hidden>
+    <header class="topbar glass">
+      <div class="brand">
+        <strong>Isekai</strong>
+        <span class="muted small">Sala</span>
+        <button id="roomCode" class="room-code" title="Clique para copiar"></button>
+        <span id="peopleCount" class="muted small"></span>
+      </div>
+      <div class="actions">
+        <span id="shareStatus" class="share-status" hidden></span>
+        <button id="shareBtn" class="btn primary">Compartilhar tela</button>
+        <button id="leaveBtn" class="btn">Sair da sala</button>
+      </div>
+    </header>
+
+    <aside class="sidebar glass">
+      <h2>Pessoas na sala</h2>
+      <p class="muted small">Escolha quem você quer assistir. Só a transmissão escolhida é recebida.</p>
+      <ul id="memberList" class="members"></ul>
+    </aside>
+
+    <main class="viewer glass">
+      <div class="viewer-head">
+        <span id="watchTitle">Nenhuma transmissão selecionada</span>
+        <span id="stats" class="stats"></span>
+      </div>
+      <div id="stage" class="stage">
+        <video id="video" playsinline autoplay hidden></video>
+        <div id="stageEmpty" class="stage-empty">
+          <svg class="magic"><use href="#magic"/></svg>
+          <p id="stageMsg" class="stage-msg">Escolha uma pessoa que esteja transmitindo para assistir.</p>
+        </div>
+        <div id="controls" class="controls" hidden>
+          <button id="muteBtn" class="icon-btn" title="Mudo">🔊</button>
+          <input id="volume" type="range" min="0" max="1" step="0.01" value="1">
+          <span class="grow"></span>
+          <button id="fullBtn" class="icon-btn" title="Tela cheia (duplo clique)">⛶</button>
+        </div>
+      </div>
+    </main>
+  </section>
+
+  <!-- Escolher o que compartilhar -->
+  <div id="shareModal" class="modal" hidden>
+    <div class="modal-card glass">
+      <h2>O que você quer compartilhar?</h2>
+      <div class="tabs">
+        <button class="tab active" data-kind="window">Janelas</button>
+        <button class="tab" data-kind="screen">Telas</button>
+      </div>
+      <div id="sourceGrid" class="source-grid"></div>
+
+      <div class="field-row">
+        <label class="field">
+          <span>Som de qual programa?</span>
+          <select id="appSelect"></select>
+        </label>
+        <label class="field">
+          <span>Qualidade</span>
+          <select id="qualitySelect">
+            <option value="720" selected>720p (padrão)</option>
+            <option value="1080">1080p (internet boa)</option>
+          </select>
+        </label>
+      </div>
+      <p class="hint">Só o som desse programa vai para a sala — a voz do Discord não vaza.
+        Netflix, Prime e Disney+ no navegador aparecem pretos por causa da proteção contra cópia.</p>
+
+      <div class="modal-actions">
+        <button id="cancelShare" class="btn">Cancelar</button>
+        <button id="confirmShare" class="btn primary" disabled>Compartilhar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="../node_modules/peerjs/dist/peerjs.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
