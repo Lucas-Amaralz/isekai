@@ -1,6 +1,6 @@
 {
   "name": "isekai",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Salas para assistir filme e série juntos, com o som de um programa só.",
   "main": "main.js",
   "scripts": {

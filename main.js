@@ -1,5 +1,5 @@
 // Isekai: salas para assistir filme e série juntos, com a tela e o som de UM programa só.
-const { app, BrowserWindow, ipcMain, desktopCapturer, session, nativeTheme, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, session, nativeTheme, clipboard, dialog } = require('electron');
 const { spawn, execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -33,7 +33,34 @@ function restartInCompat(reason) {
   app.exit(0);
 }
 
-app.on('child-process-gone', (_e, details) => {
+// Captura alternativa: em alguns PCs o jeito novo de capturar do Windows (Windows Graphics Capture) recusa tudo
+// com "Could not start video source". Com o arquivo abaixo, o Chromium usa o jeito antigo (GDI/DXGI).
+const altCaptureFile = path.join(app.getPath('userData'), 'captura-alternativa');
+const altCapture = process.argv.includes('--captura-alternativa') || fs.existsSync(altCaptureFile);
+if (altCapture) app.commandLine.appendSwitch('disable-features', 'AllowWgcWindowCapturer,AllowWgcScreenCapturer');
+
+ipcMain.handle('capture-failed', async () => {
+  if (altCapture || !win) return 'sem-saida';
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'question',
+    title: 'Isekai',
+    message: 'O Windows recusou a captura neste PC.',
+    detail: 'Dá para reabrir o Isekai usando outro jeito de capturar a tela. Você vai sair da sala e precisa entrar de novo com o código.',
+    buttons: ['Reabrir com a captura alternativa', 'Agora não'],
+    defaultId: 0,
+    cancelId: 1,
+  });
+  if (response !== 0) return 'cancelado';
+  try {
+    fs.mkdirSync(path.dirname(altCaptureFile), { recursive: true });
+    fs.writeFileSync(altCaptureFile, 'ligado\n');
+  } catch {}
+  app.relaunch();
+  app.exit(0);
+  return 'reabrindo';
+});
+
+app.on('child-process-gone',(_e, details) => {
   if (details.type === 'GPU' && details.reason !== 'clean-exit') restartInCompat('a placa de vídeo travou (' + details.reason + ')');
 });
 

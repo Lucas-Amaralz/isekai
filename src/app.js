@@ -610,7 +610,7 @@ async function confirmShare() {
   } catch (err) {
     console.error(err);
     stopShare(true);
-    toast('Não deu para compartilhar: ' + (err.message || err));
+    toast('Não deu para compartilhar: ' + (err.message || err), 9000);
   }
 }
 
@@ -647,6 +647,9 @@ async function captureSource(source) {
       lastError = err;
     }
   }
+  // Nada funcionou: oferece reabrir com o jeito antigo de capturar do Windows (só pergunta se ainda não está nele).
+  const answer = await window.isekai.captureFailed();
+  if (answer === 'reabrindo') return new Promise(() => {});
   throw new Error(source.screen
     ? 'o Windows não deixou capturar essa tela (' + lastError.message + ').'
     : 'o Windows não deixou capturar essa janela. Tenta outra janela ou a aba "Telas" (' + lastError.message + ').');
@@ -663,10 +666,19 @@ async function startShare(source, pid) {
   videoTrack.contentHint = 'motion';
   videoTrack.onended = () => stopShare(false);
 
+  // Se o som falhar (antivírus barrando o IsekaiAudio, programa fechado...), a imagem segue sozinha.
+  let audioError = null;
   if (pid) {
-    audioPipe = await startAudioPipe(pid);
-    stream.addTrack(audioPipe.track);
+    try {
+      audioPipe = await startAudioPipe(pid);
+      stream.addTrack(audioPipe.track);
+    } catch (err) {
+      console.warn('som', err);
+      audioPipe = null;
+      audioError = err.message || String(err);
+    }
   }
+  if (audioError) toast('Transmitindo sem som: o Windows ou o antivírus bloqueou a captura do som (' + audioError + '). Libere o IsekaiAudio no antivírus.', 9000);
   localStream = stream;
   sendToOwner({ t: 'streaming', on: true });
   updateShareUi();
@@ -875,9 +887,9 @@ async function tuneSenders(pc) {
 // ---------- Aviso rápido ----------
 
 let toastTimer = null;
-function toast(text) {
+function toast(text, ms = 3500) {
   ui.toast.textContent = text;
   ui.toast.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { ui.toast.hidden = true; }, 3500);
+  toastTimer = setTimeout(() => { ui.toast.hidden = true; }, ms);
 }
