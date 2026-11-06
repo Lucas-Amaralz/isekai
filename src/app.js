@@ -46,11 +46,12 @@ const $ = (id) => document.getElementById(id);
 const ui = {
   home: $('home'), room: $('room'), nameInput: $('nameInput'),
   enterBtn: $('enterBtn'), homeError: $('homeError'),
-  peopleCount: $('peopleCount'), shareBtn: $('shareBtn'), shareStatus: $('shareStatus'),
+  peopleCount: $('peopleCount'), shareBtn: $('shareBtn'), switchBtn: $('switchBtn'), shareStatus: $('shareStatus'),
   leaveBtn: $('leaveBtn'), memberList: $('memberList'), watchTitle: $('watchTitle'), stats: $('stats'),
   stage: $('stage'), video: $('video'), stageMsg: $('stageMsg'), stageEmpty: $('stageEmpty'), controls: $('controls'),
   muteBtn: $('muteBtn'), volume: $('volume'), fullBtn: $('fullBtn'),
-  shareModal: $('shareModal'), sourceGrid: $('sourceGrid'), appSelect: $('appSelect'), qualitySelect: $('qualitySelect'),
+  shareModal: $('shareModal'), shareTitle: $('shareTitle'), sourceGrid: $('sourceGrid'), appSelect: $('appSelect'),
+  qualityField: $('qualityField'), qualitySelect: $('qualitySelect'),
   cancelShare: $('cancelShare'), confirmShare: $('confirmShare'), toast: $('toast'),
 };
 
@@ -71,6 +72,7 @@ let memberList = [];
 // Quem transmite
 let localStream = null;
 let audioPipe = null;
+let audioPid = null;
 const outgoing = new Map(); // viewerId -> MediaConnection
 
 // Quem assiste
@@ -646,17 +648,25 @@ let chosenSource = null;
 
 ui.shareBtn.onclick = () => {
   if (localStream) stopShare(false);
-  else openShareModal();
+  else openShareModal(false);
 };
+ui.switchBtn.onclick = () => openShareModal(true);
 
-async function openShareModal() {
+// A mesma janela serve para começar e para trocar. Na troca a qualidade fica como está: ela foi combinada
+// com quem assiste no começo da chamada e mudar exigiria reconectar todo mundo.
+async function openShareModal(switching) {
   chosenSource = null;
+  ui.shareTitle.textContent = switching ? 'Trocar para o quê?' : 'O que você quer compartilhar?';
+  ui.confirmShare.textContent = switching ? 'Trocar' : 'Compartilhar';
+  ui.qualityField.hidden = switching;
   ui.confirmShare.disabled = true;
   ui.sourceGrid.replaceChildren();
   ui.shareModal.hidden = false;
   const [srcs, apps] = await Promise.all([window.isekai.getSources(), window.isekai.listApps()]);
   sources = srcs;
   fillApps(apps);
+  // Na troca, o som continua no programa atual até a pessoa escolher outro.
+  if (switching && audioPid && [...ui.appSelect.options].some((o) => o.value === String(audioPid))) ui.appSelect.value = String(audioPid);
   renderSources();
 }
 
@@ -719,9 +729,21 @@ async function confirmShare() {
   if (!chosenSource) return;
   const source = chosenSource;
   const pid = ui.appSelect.value ? Number(ui.appSelect.value) : null;
+  ui.shareModal.hidden = true;
+  if (localStream) {
+    ui.switchBtn.disabled = true;
+    try {
+      await switchShare(source, pid);
+    } catch (err) {
+      // A transmissão antiga só sai depois que a nova captura funcionou: quem assiste nem percebe a falha.
+      console.error(err);
+      toast('Não deu para trocar, continua transmitindo o que estava: ' + (err.message || err), 9000);
+    }
+    ui.switchBtn.disabled = false;
+    return;
+  }
   quality = QUALITIES[ui.qualitySelect.value] || QUALITIES['720'];
   try { localStorage.setItem('isekai-quality', ui.qualitySelect.value); } catch {}
-  ui.shareModal.hidden = true;
   try {
     await startShare(source, pid);
   } catch (err) {
@@ -772,7 +794,7 @@ async function captureSource(source) {
     : 'o Windows não deixou capturar essa janela. Tenta outra janela ou a aba "Telas" (' + lastError.message + ').');
 }
 
-async function startShare(source, pid) {
+async function captureVideo(source) {
   const stream = await captureSource(source);
   const [videoTrack] = stream.getVideoTracks();
   // Os jeitos reserva capturam no tamanho original: reduz aqui para a qualidade escolhida.
@@ -782,12 +804,18 @@ async function startShare(source, pid) {
   }
   videoTrack.contentHint = 'motion';
   videoTrack.onended = () => stopShare(false);
+  return stream;
+}
+
+async function startShare(source, pid) {
+  const stream = await captureVideo(source);
 
   // Se o som falhar (antivírus barrando o IsekaiAudio, programa fechado...), a imagem segue sozinha.
   let audioError = null;
   if (pid) {
     try {
       audioPipe = await startAudioPipe(pid);
+      audioPid = pid;
       stream.addTrack(audioPipe.track);
     } catch (err) {
       console.warn('som', err);
@@ -803,6 +831,66 @@ async function startShare(source, pid) {
   else showStage();
 }
 
+// Troca o que está sendo transmitido sem desligar ninguém: a imagem nova entra no lugar da antiga dentro das
+// chamadas que já estão abertas. O localStream continua o mesmo, então quem chegar depois já recebe a nova.
+async function switchShare(source, pid) {
+  const stream = await captureVideo(source);
+  const [videoTrack] = stream.getVideoTracks();
+  // A transmissão pode ter parado enquanto a captura abria.
+  if (!localStream) { videoTrack.onended = null; videoTrack.stop(); return; }
+  const [oldTrack] = localStream.getVideoTracks();
+  oldTrack.onended = null;
+  localStream.removeTrack(oldTrack);
+  localStream.addTrack(videoTrack);
+  await Promise.all([...outgoing.values()].map((call) => {
+    const sender = senderOf(call, 'video');
+    return sender ? sender.replaceTrack(videoTrack) : null;
+  }));
+  oldTrack.stop();
+  if (pid !== audioPid) await switchAudio(pid);
+  if (!localStream) return;
+  for (const call of outgoing.values()) if (call.peerConnection) tuneSenders(call.peerConnection);
+  toast('Transmissão trocada.');
+}
+
+async function switchAudio(pid) {
+  if (audioPipe) {
+    localStream.removeTrack(audioPipe.track);
+    audioPipe.stop();
+    audioPipe = null;
+  }
+  audioPid = null;
+  let pipe = null;
+  if (pid) {
+    try {
+      pipe = await startAudioPipe(pid);
+    } catch (err) {
+      console.warn('som', err);
+      toast('Trocou a imagem, mas o som falhou (' + (err.message || err) + ').', 9000);
+    }
+  }
+  if (!localStream) { if (pipe) pipe.stop(); return; }
+  if (pipe) {
+    audioPipe = pipe;
+    audioPid = pid;
+    localStream.addTrack(pipe.track);
+  }
+  const track = pipe ? pipe.track : null;
+  for (const [id, call] of [...outgoing]) {
+    const sender = senderOf(call, 'audio');
+    if (sender) await sender.replaceTrack(track);
+    // Começou "Sem som": a chamada não tem lugar para som, então só essa religa (um instante sem imagem).
+    else if (track) callViewer(id);
+  }
+}
+
+// Pelo receiver, porque o sender fica sem track quando a transmissão está sem som.
+function senderOf(call, kind) {
+  const pc = call.peerConnection;
+  const transceiver = pc && pc.getTransceivers().find((t) => t.receiver.track.kind === kind);
+  return transceiver ? transceiver.sender : null;
+}
+
 function stopShare(silent) {
   for (const id of [...outgoing.keys()]) closeOutgoing(id);
   if (localStream) {
@@ -810,6 +898,7 @@ function stopShare(silent) {
     localStream = null;
   }
   if (audioPipe) { audioPipe.stop(); audioPipe = null; }
+  audioPid = null;
   if (inRoom && !silent) sendToOwner({ t: 'streaming', on: false });
   if (watching === myId) { watching = null; if (inRoom) renderMembers(); }
   updateShareUi();
@@ -821,6 +910,7 @@ function updateShareUi() {
   ui.shareBtn.textContent = live ? 'Parar transmissão' : 'Compartilhar tela';
   ui.shareBtn.classList.toggle('primary', !live);
   ui.shareBtn.classList.toggle('danger', live);
+  ui.switchBtn.hidden = !live;
   ui.shareStatus.hidden = !live;
   ui.shareStatus.textContent = outgoing.size === 0 ? 'Ao vivo' : outgoing.size === 1 ? 'Ao vivo · 1 assistindo' : 'Ao vivo · ' + outgoing.size + ' assistindo';
 }

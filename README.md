@@ -23,6 +23,7 @@ Dica: no menu do navegador, **Adicionar à tela inicial** deixa o Isekai com íc
 1. Coloque seu nome e clique em **Entrar na sala**. Só existe uma sala, a dos amigos: não tem código.
 2. Quem vai passar o filme clica em **Compartilhar tela**, escolhe a janela do player e, embaixo, de qual programa sai o som.
 3. Para assistir, clique no nome de quem está **Transmitindo**. Duplo clique no vídeo deixa em tela cheia.
+4. Para mudar de janela no meio da transmissão, clique em **Trocar tela**: quem está assistindo continua conectado e a imagem muda na hora.
 
 ![Sala](docs/sala.png)
 

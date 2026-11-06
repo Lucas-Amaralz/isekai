@@ -157,9 +157,11 @@ ipcMain.handle('start-audio', (event, pid) => new Promise((resolve) => {
   });
   proc.stderr.on('data', (d) => { errText += d.toString(); });
   proc.on('exit', (code) => {
-    if (proc === audioProc) audioProc = null;
+    // Se fui eu que parei (trocar de programa, parar a transmissão), não é para avisar que o programa fechou.
+    const unexpected = proc === audioProc;
+    if (unexpected) audioProc = null;
     if (code && code !== 0) done({ ok: false, error: errText.trim() || 'O capturador de som fechou.' });
-    if (!event.sender.isDestroyed()) event.sender.send('audio-ended');
+    if (unexpected && !event.sender.isDestroyed()) event.sender.send('audio-ended');
   });
   proc.on('error', (err) => done({ ok: false, error: err.message }));
   // Se em 1,5 s não deu erro, a captura começou (o Windows só manda pacotes quando o programa toca som).

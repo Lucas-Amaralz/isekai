@@ -63,6 +63,7 @@
       </div>
       <div class="actions">
         <span id="shareStatus" class="share-status" hidden></span>
+        <button id="switchBtn" class="btn" hidden>Trocar tela</button>
         <button id="shareBtn" class="btn primary">Compartilhar tela</button>
         <button id="leaveBtn" class="btn">Sair da sala</button>
       </div>
@@ -98,7 +99,7 @@
   <!-- Escolher o que compartilhar -->
   <div id="shareModal" class="modal" hidden>
     <div class="modal-card glass">
-      <h2>O que você quer compartilhar?</h2>
+      <h2 id="shareTitle">O que você quer compartilhar?</h2>
       <div class="tabs">
         <button class="tab active" data-kind="window">Janelas</button>
         <button class="tab" data-kind="screen">Telas</button>
@@ -110,7 +111,7 @@
           <span>Som de qual programa?</span>
           <select id="appSelect"></select>
         </label>
-        <label class="field">
+        <label id="qualityField" class="field">
           <span>Qualidade</span>
           <select id="qualitySelect">
             <option value="720" selected>720p (padrão)</option>
