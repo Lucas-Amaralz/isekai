@@ -240,6 +240,8 @@ function stopAudio() {
 function setupUpdates() {
   if (!app.isPackaged) return;
   const { autoUpdater } = require('electron-updater');
+  // O download "só das partes que mudaram" trava com o GitHub: baixa o instalador inteiro.
+  autoUpdater.disableDifferentialDownload = true;
   autoUpdater.on('update-downloaded', async (info) => {
     const { response } = await dialog.showMessageBox(win, {
       type: 'info',
