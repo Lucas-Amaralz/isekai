@@ -1,3 +1,5 @@
+if (window.top !== window.self) throw new Error('Isekai não abre dentro de outro site.'); // ver web-shim.js
+
 // Isekai: uma sala só, a dos amigos. Quem entra primeiro segura a sala (o dono) e todo mundo se conecta a ele
 // para saber quem está na sala e quem está transmitindo; se o dono sair, outro assume sozinho.
 // O vídeo vai direto de quem transmite para quem escolheu assistir.

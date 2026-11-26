@@ -1,7 +1,11 @@
 // Isekai: salas para assistir filme e série juntos, com a tela e o som de UM programa só.
-const { app, BrowserWindow, ipcMain, desktopCapturer, session, nativeTheme, clipboard, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, session, nativeTheme, clipboard, dialog, net } = require('electron');
 const { spawn, execFile } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
+
+// Chave pública que confere as atualizações (a privada fica só no PC do Lucas, em ~/.isekai).
+const UPDATE_KEY = 'MCowBQYDK2VwAyEAdanrKlVZgM+fts1cNfXqKpS8479upoayEj6gfgEDZfw=';
 const path = require('path');
 
 // O capturador de som fica em resources/ no desenvolvimento e ao lado do app no .exe empacotado.
@@ -242,6 +246,28 @@ function setupUpdates() {
   const { autoUpdater } = require('electron-updater');
   // O download "só das partes que mudaram" trava com o GitHub: baixa o instalador inteiro.
   autoUpdater.disableDifferentialDownload = true;
+  autoUpdater.disableWebInstaller = true;
+  autoUpdater.allowDowngrade = false;
+  // Sem certificado da Microsoft o electron-updater não confere quem fez o instalador. Então o Isekai confere sozinho:
+  // só instala se Isekai-Setup.exe.sig (assinado pela chave do Lucas, que nunca vai pro GitHub) bater com UPDATE_KEY.
+  // Quem invadir o GitHub consegue trocar o .exe, mas não consegue assinar.
+  let pendingVersion = null;
+  autoUpdater.on('update-available', (info) => { pendingVersion = info && info.version; });
+  autoUpdater.verifySignature = async (file) => {
+    try {
+      if (typeof pendingVersion !== 'string' || !/^\d+\.\d+\.\d+$/.test(pendingVersion)) return 'versão desconhecida';
+      const url = 'https://github.com/Lucas-Amaralz/isekai/releases/download/v' + pendingVersion + '/Isekai-Setup.exe.sig';
+      const res = await net.fetch(url);
+      if (!res.ok) return 'sem assinatura (' + res.status + ')';
+      const text = (await res.text()).trim();
+      if (!/^[A-Za-z0-9+/]{86}==$/.test(text)) return 'assinatura malformada';
+      const key = crypto.createPublicKey({ key: Buffer.from(UPDATE_KEY, 'base64'), format: 'der', type: 'spki' });
+      const ok = crypto.verify(null, await fs.promises.readFile(file), key, Buffer.from(text, 'base64'));
+      return ok ? null : 'assinatura não confere';
+    } catch (e) {
+      return 'erro ao conferir: ' + (e && e.message);
+    }
+  };
   autoUpdater.on('update-downloaded', async (info) => {
     const { response } = await dialog.showMessageBox(win, {
       type: 'info',

@@ -46,11 +46,14 @@ A qualidade começa em 720p; com internet boa dá para escolher 1080p na hora de
 ## Rodar o código
 
 ```bash
-npm install
+npm ci                             # instala exatamente o que está no package-lock.json
+node node_modules/electron/install.js  # o .npmrc bloqueia scripts de instalação; o do Electron roda à mão
 npm run build-audio   # compila o capturador de som com o csc que já vem no Windows
 npm start
 ```
 
-`npm run dist` gera o instalador `dist/Isekai-Setup.exe` e o `latest.yml` que o Isekai usa para se atualizar (os dois vão na Release, junto com o `.blockmap`).
+`npm run dist` gera o instalador `dist/Isekai-Setup.exe` e o `latest.yml` que o Isekai usa para se atualizar (os dois vão na Release, junto com o `.blockmap` e o `.sig`).
+
+**Atualizações assinadas:** no fim do `npm run dist`, `scripts/assinar.js` assina o instalador com uma chave Ed25519 que fica só no PC de quem publica (`~/.isekai/assinatura-privada.pem`, nunca no repositório). O Isekai instalado baixa `Isekai-Setup.exe.sig` e só aplica a atualização se a assinatura bater com a chave pública do `main.js`. Quem conseguir mexer na Release consegue trocar o `.exe`, mas não consegue assiná-lo.
 
 Arte de fundo gerada no Figma; fontes Cormorant Garamond e Nunito (SIL Open Font License).
