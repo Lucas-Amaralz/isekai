@@ -7,7 +7,6 @@ contextBridge.exposeInMainWorld('isekai', {
   startAudio: (pid) => ipcRenderer.invoke('start-audio', pid),
   stopAudio: () => ipcRenderer.invoke('stop-audio'),
   copy: (text) => ipcRenderer.invoke('copy', text),
-  iceServers: () => ipcRenderer.invoke('ice-servers'),
   captureFailed: () => ipcRenderer.invoke('capture-failed'),
   setFullscreen: (on) => ipcRenderer.invoke('set-fullscreen', on),
   onAudio: (fn) => ipcRenderer.on('audio-pcm', (_e, chunk) => fn(chunk)),

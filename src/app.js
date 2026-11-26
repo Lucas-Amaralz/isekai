@@ -1,8 +1,16 @@
 // Isekai: uma sala só, a dos amigos. Quem entra primeiro segura a sala (o dono) e todo mundo se conecta a ele
 // para saber quem está na sala e quem está transmitindo; se o dono sair, outro assume sozinho.
 // O vídeo vai direto de quem transmite para quem escolheu assistir.
-const ROOM_PREFIX = 'isekai-sala-';
-const ROOM = 'amigos-do-lucas';
+//
+// Segurança: a sala é protegida por uma senha que só os amigos sabem. O endereço da sala no servidor sai da senha
+// (quem não sabe a senha nem acha a sala) e, ao conectar, dono e convidado provam um para o outro que sabem a
+// senha sem nunca mandar ela pela internet. Quem não prova é desconectado e não vê nem a lista nem o vídeo.
+const ROOM_PREFIX = 'isekai-';
+const MIN_PASSWORD = 8;
+const AUTH_TIMEOUT = 15000;
+let ROOM = null;
+let authKey = null;
+let derivedFor = null;
 // 720p é o padrão (leve para qualquer PC e internet); quem quiser escolhe 1080p na hora de compartilhar.
 const QUALITIES = {
   '720': { width: 1280, height: 720, bitrate: 5_000_000 },
@@ -15,6 +23,7 @@ const CONNECT_TIMEOUT = 20000;
 const CAN_SHARE = typeof window.isekai.getSources === 'function';
 const PEER_OPTIONS = {
   debug: 1,
+  secure: true,
   config: {
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
@@ -23,16 +32,68 @@ const PEER_OPTIONS = {
   },
 };
 
-// Servidor de apoio (TURN): faz a ponte quando a internet de alguém bloqueia a conexão direta.
 async function peerOptions() {
-  try {
-    const turn = await window.isekai.iceServers();
-    if (turn && turn.length) return { ...PEER_OPTIONS, config: { iceServers: [...PEER_OPTIONS.config.iceServers, ...turn] } };
-  } catch (err) {
-    console.warn('turn', err);
-  }
   return PEER_OPTIONS;
 }
+
+// ---------- Senha da sala ----------
+
+const enc = new TextEncoder();
+const toHex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+const fromHex = (hex) => new Uint8Array(hex.match(/../g).map((h) => parseInt(h, 16)));
+const isNonce = (n) => typeof n === 'string' && /^[0-9a-f]{32}$/.test(n);
+const isMsg = (msg) => !!msg && typeof msg === 'object' && typeof msg.t === 'string';
+const newNonce = () => toHex(crypto.getRandomValues(new Uint8Array(16)));
+
+// A senha vira duas coisas: o endereço da sala e a chave das provas. É lento de propósito (PBKDF2),
+// para ninguém conseguir ficar chutando senhas.
+async function derivePassword(password) {
+  const base = await crypto.subtle.importKey('raw', enc.encode(password.normalize('NFC')), 'PBKDF2', false, ['deriveBits']);
+  return toHex(await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', hash: 'SHA-256', salt: enc.encode('isekai-sala-dos-amigos-v2'), iterations: 310000 }, base, 512));
+}
+
+async function useKey(keyHex) {
+  if (derivedFor === keyHex && ROOM && authKey) return;
+  const bits = fromHex(keyHex);
+  ROOM = toHex(bits.slice(0, 16));
+  authKey = await crypto.subtle.importKey('raw', bits.slice(32), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
+  derivedFor = keyHex;
+}
+
+// A senha em si nunca é guardada. No PC fica só a chave que sai dela (não dá para voltar dela para a senha,
+// então uma senha que a pessoa usa em outro lugar não vaza). No site não fica nada: outras páginas do mesmo
+// endereço do GitHub conseguiriam ler o que ele guarda.
+const KEY_STORE = 'isekai-chave';
+const isKeyHex = (k) => typeof k === 'string' && /^[0-9a-f]{128}$/.test(k);
+function savedKey() {
+  if (!CAN_SHARE) return null;
+  try { const k = localStorage.getItem(KEY_STORE); return isKeyHex(k) ? k : null; } catch { return null; }
+}
+
+// "Impressão digital" da criptografia de uma conexão (DTLS). Entra nas provas: se alguém no meio do caminho
+// (até o próprio servidor do PeerJS) tentar se passar por um dos lados, as impressões não batem e a conexão cai.
+function sdpFingerprint(desc) {
+  const m = desc && desc.sdp && desc.sdp.match(/a=fingerprint:(\S+) ([0-9A-Fa-f:]+)/);
+  return m ? m[1].toLowerCase() + ' ' + m[2].toUpperCase() : null;
+}
+function fingerprints(pc) {
+  if (!pc) return null;
+  const local = sdpFingerprint(pc.currentLocalDescription || pc.localDescription);
+  const remote = sdpFingerprint(pc.currentRemoteDescription || pc.remoteDescription);
+  return local && remote ? { local, remote } : null;
+}
+
+async function makeProof(...parts) {
+  return toHex(await crypto.subtle.sign('HMAC', authKey, enc.encode(parts.join('|'))));
+}
+
+async function checkProof(proof, ...parts) {
+  if (typeof proof !== 'string' || !/^[0-9a-f]{64}$/.test(proof)) return false;
+  return crypto.subtle.verify('HMAC', authKey, fromHex(proof), enc.encode(parts.join('|')));
+}
+
+const cleanName = (name) => String(name || 'Alguém').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 24) || 'Alguém';
 
 let connectTimer = null;
 function startConnectTimer(text) {
@@ -44,7 +105,7 @@ function startConnectTimer(text) {
 
 const $ = (id) => document.getElementById(id);
 const ui = {
-  home: $('home'), room: $('room'), nameInput: $('nameInput'),
+  home: $('home'), room: $('room'), nameInput: $('nameInput'), passInput: $('passInput'),
   enterBtn: $('enterBtn'), homeError: $('homeError'),
   peopleCount: $('peopleCount'), shareBtn: $('shareBtn'), switchBtn: $('switchBtn'), shareStatus: $('shareStatus'),
   leaveBtn: $('leaveBtn'), memberList: $('memberList'), watchTitle: $('watchTitle'), stats: $('stats'),
@@ -52,7 +113,7 @@ const ui = {
   muteBtn: $('muteBtn'), volume: $('volume'), fullBtn: $('fullBtn'),
   shareModal: $('shareModal'), shareTitle: $('shareTitle'), sourceGrid: $('sourceGrid'), appSelect: $('appSelect'),
   qualityField: $('qualityField'), qualitySelect: $('qualitySelect'),
-  cancelShare: $('cancelShare'), confirmShare: $('confirmShare'), toast: $('toast'),
+  cancelShare: $('cancelShare'), confirmShare: $('confirmShare'), toast: $('toast'), screenWarn: $('screenWarn'),
 };
 
 let peer = null;
@@ -84,6 +145,8 @@ let statsTimer = null;
 // ---------- Tela inicial ----------
 
 try { ui.nameInput.value = localStorage.getItem('isekai-name') || ''; } catch {}
+try { localStorage.removeItem('isekai-senha'); } catch {}
+if (savedKey()) ui.passInput.placeholder = 'Senha salva neste PC (digite só para trocar)';
 try { if (QUALITIES[localStorage.getItem('isekai-quality')]) ui.qualitySelect.value = localStorage.getItem('isekai-quality'); } catch {}
 
 function readName() {
@@ -97,6 +160,17 @@ function readName() {
   return name;
 }
 
+function readPassword() {
+  const pass = ui.passInput.value;
+  if (!pass && savedKey()) return { saved: savedKey() };
+  if (pass.length < MIN_PASSWORD) {
+    showHomeError('A senha da sala precisa ter pelo menos ' + MIN_PASSWORD + ' letras ou números.');
+    ui.passInput.focus();
+    return null;
+  }
+  return { pass };
+}
+
 function showHomeError(text) {
   ui.homeError.textContent = text;
   ui.homeError.hidden = !text;
@@ -106,24 +180,45 @@ function setHomeBusy(busy) {
   ui.enterBtn.disabled = busy;
 }
 
+let password = null;
 ui.enterBtn.onclick = () => {
   const name = readName();
   if (!name) return;
+  const pass = readPassword();
+  if (!pass) return;
   myName = name;
+  password = pass;
   showHomeError('');
   setHomeBusy(true);
   enterSala();
 };
 
 ui.nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') ui.enterBtn.click(); });
+ui.passInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') ui.enterBtn.click(); });
 
 // ---------- Entrar ----------
 
 // Tenta entrar na sala; se ninguém estiver segurando, eu seguro. Se dois tentarem segurar juntos,
 // quem perde entra como convidado. O limite evita ficar trocando para sempre.
 let enterTries = 0;
-function enterSala() {
+async function enterSala() {
   enterTries = 0;
+  try {
+    // Deriva uma vez só: nas reconexões usa a chave que já saiu da senha.
+    if (password.pass) {
+      const key = await derivePassword(password.pass);
+      password = { saved: key };
+      ui.passInput.value = '';
+      if (CAN_SHARE) {
+        try { localStorage.setItem(KEY_STORE, key); } catch {}
+        ui.passInput.placeholder = 'Senha salva neste PC (digite só para trocar)';
+      }
+    }
+    await useKey(password.saved);
+  } catch (err) {
+    console.error(err);
+    return enterFailed('Este navegador não tem a segurança necessária para entrar na sala. Abra pelo endereço https do site.');
+  }
   joinRoom(ROOM);
 }
 
@@ -150,8 +245,10 @@ async function createRoom(code) {
     myId = id;
     isOwner = true;
     members.set(myId, { conn: null, name: myName, streaming: false, lastSeen: Date.now() });
+    const firstTime = !rewatchName && !localStream;
     enterRoom();
     broadcastMembers();
+    if (firstTime) toast('Você abriu a sala. Se esperava encontrar alguém aqui, confere se a senha está igual à deles.', 7000);
   });
   peer.on('connection', (conn) => {
     acceptMember(conn);
@@ -175,8 +272,19 @@ async function createRoom(code) {
   setupMedia(peer);
 }
 
+// Dono: ninguém entra na lista sem provar que sabe a senha. Até provar, tudo que a pessoa mandar é ignorado.
 function acceptMember(conn) {
-  conn.on('data', (msg) => ownerHandle(conn.peer, msg, conn));
+  const auth = { nonce: null, done: false };
+  // Em fila: a prova leva um instante para conferir e a mensagem seguinte não pode passar na frente.
+  let queue = Promise.resolve();
+  conn.on('data', (msg) => {
+    queue = queue.then(async () => {
+      if (!isMsg(msg)) return;
+      if (auth.done) ownerHandle(conn.peer, msg, conn);
+      else await ownerAuth(conn, msg, auth);
+    }).catch((err) => { console.warn('auth', err); conn.close(); });
+  });
+  setTimeout(() => { if (!auth.done) conn.close(); }, AUTH_TIMEOUT);
   // Só tira da sala se for a ligação que a pessoa está usando (pode ter uma de ida e uma de volta).
   const gone = () => { const m = members.get(conn.peer); if (m && m.conn === conn) removeMember(conn.peer); };
   conn.on('close', gone);
@@ -204,20 +312,67 @@ async function joinRoom(code) {
   setupMedia(peer);
 }
 
+async function ownerAuth(conn, msg, auth) {
+  if (msg.t === 'hello' && !auth.nonce && isNonce(msg.n)) {
+    const fp = fingerprints(conn.peerConnection);
+    if (!fp) { conn.close(); return; }
+    auth.nonce = newNonce();
+    conn.send({ t: 'challenge', n: auth.nonce, proof: await makeProof('dono', msg.n, myId, conn.peer, fp.local, fp.remote) });
+  } else if (msg.t === 'auth' && auth.nonce) {
+    // Uma tentativa só: errou, cai fora.
+    const nonce = auth.nonce;
+    auth.nonce = null;
+    const fp = fingerprints(conn.peerConnection);
+    const ok = !!fp && await checkProof(msg.proof, 'convidado', nonce, conn.peer, myId, fp.remote, fp.local);
+    if (!ok || !peer || peer.destroyed || !isOwner) { conn.close(); return; }
+    auth.done = true;
+    const old = members.get(conn.peer);
+    members.set(conn.peer, { conn, name: cleanName(msg.name), streaming: old ? old.streaming : false, lastSeen: Date.now() });
+    broadcastMembers();
+  } else {
+    conn.close();
+  }
+}
+
+// Convidado: só confio no dono depois que ele provar que sabe a senha (protege contra alguém que tenha
+// descoberto o endereço da sala e esteja se passando por dono).
 function useOwnerConn(conn, code) {
+  let nonce = null;
+  let trusted = false;
   conn.on('open', () => {
     if (ownerConn) { conn.close(); return; }
-    ownerConn = conn;
-    isOwner = false;
-    lastOwnerMsg = Date.now();
-    conn.send({ t: 'hello', name: myName });
-    enterRoom();
+    nonce = newNonce();
+    conn.send({ t: 'hello', n: nonce });
   });
-  conn.on('data', (msg) => {
+  let queue = Promise.resolve();
+  conn.on('data', (msg) => { queue = queue.then(() => fromOwner(msg)).catch((err) => console.warn('dono', err)); });
+  async function fromOwner(msg) {
+    if (!isMsg(msg)) return;
+    if (!trusted) {
+      if (msg.t !== 'challenge' || !nonce || ownerConn) return;
+      const mine = nonce;
+      nonce = null;
+      let ok = false;
+      const fp = fingerprints(conn.peerConnection);
+      try { ok = !!fp && isNonce(msg.n) && await checkProof(msg.proof, 'dono', mine, conn.peer, myId, fp.remote, fp.local); } catch {}
+      if (!ok) {
+        conn.close();
+        if (!inRoom) enterFailed('A sala não confirmou a senha. Confere a senha e tenta de novo.');
+        return;
+      }
+      if (ownerConn || !peer || peer.destroyed) { conn.close(); return; }
+      trusted = true;
+      ownerConn = conn;
+      isOwner = false;
+      lastOwnerMsg = Date.now();
+      conn.send({ t: 'auth', proof: await makeProof('convidado', msg.n, myId, conn.peer, fp.local, fp.remote), name: myName });
+      enterRoom();
+      return;
+    }
     if (conn !== ownerConn) return;
     lastOwnerMsg = Date.now();
     memberHandle(msg);
-  });
+  }
   conn.on('close', () => { if (conn === ownerConn) rejoin('Quem segurava a sala saiu. Reconectando...'); });
 }
 
@@ -337,21 +492,26 @@ function deliver(id, msg) {
 }
 
 function ownerHandle(from, msg, conn) {
+  if (!isMsg(msg)) return;
   const m = members.get(from);
-  if (m) m.lastSeen = Date.now();
+  // Só quem está na lista (já provou a senha) e pela ligação que está usando.
+  if (!m || (conn && m.conn !== conn)) return;
+  m.lastSeen = Date.now();
   switch (msg.t) {
-    case 'hello':
-      members.set(from, { conn, name: String(msg.name || 'Alguém').slice(0, 24), streaming: false, lastSeen: Date.now() });
+    case 'streaming':
+      m.streaming = !!msg.on;
       broadcastMembers();
       break;
-    case 'streaming':
-      if (m) { m.streaming = !!msg.on; broadcastMembers(); }
-      break;
     case 'watch':
-      deliver(msg.target, { t: 'watch-req', from });
+      if (typeof msg.target === 'string' && members.has(msg.target) && msg.target !== from) deliver(msg.target, { t: 'watch-req', from });
       break;
     case 'unwatch':
-      deliver(msg.target, { t: 'unwatch-req', from });
+      if (typeof msg.target === 'string' && members.has(msg.target)) deliver(msg.target, { t: 'unwatch-req', from });
+      break;
+    case 'media-proof':
+      if (typeof msg.target === 'string' && members.has(msg.target) && typeof msg.proof === 'string' && msg.proof.length === 64) {
+        deliver(msg.target, { t: 'media-proof', from, proof: msg.proof });
+      }
       break;
   }
 }
@@ -368,9 +528,13 @@ function broadcastMembers() {
 }
 
 function memberHandle(msg) {
+  if (!isMsg(msg)) return;
   switch (msg.t) {
     case 'members':
-      memberList = Array.isArray(msg.list) ? msg.list : [];
+      memberList = (Array.isArray(msg.list) ? msg.list : [])
+        .filter((m) => m && typeof m.id === 'string' && m.id.length <= 64)
+        .slice(0, 50)
+        .map((m) => ({ id: m.id, name: cleanName(m.name), streaming: !!m.streaming, owner: !!m.owner }));
       for (const id of outgoing.keys()) if (!memberList.some((m) => m.id === id)) closeOutgoing(id);
       if (watching) {
         const target = memberList.find((m) => m.id === watching);
@@ -385,16 +549,21 @@ function memberHandle(msg) {
       showStage();
       break;
     case 'watch-req':
-      if (localStream) callViewer(msg.from);
+      if (localStream && isMember(msg.from) && msg.from !== myId) callViewer(msg.from);
       break;
     case 'unwatch-req':
-      closeOutgoing(msg.from);
+      if (typeof msg.from === 'string') closeOutgoing(msg.from);
+      break;
+    case 'media-proof':
+      if (typeof msg.from === 'string') onMediaProof(msg.from, msg.proof);
       break;
     case 'closed':
       rejoin('Quem segurava a sala saiu. Reconectando...');
       break;
   }
 }
+
+const isMember = (id) => typeof id === 'string' && memberList.some((m) => m.id === id);
 
 // ---------- Lista de pessoas ----------
 
@@ -468,9 +637,28 @@ function setupMedia(p) {
   });
 }
 
+// Quem assiste prova para quem transmite (pelo dono) que está na sala e que a conexão do vídeo é mesmo com ele.
+function sendMediaProof(call) {
+  let sent = false;
+  const pc = call.peerConnection;
+  const trySend = async () => {
+    if (sent || incoming !== call) return;
+    const fp = fingerprints(call.peerConnection);
+    if (!fp) return;
+    sent = true;
+    sendToOwner({ t: 'media-proof', target: call.peer, proof: await makeProof('midia', myId, call.peer, fp.local, fp.remote) });
+  };
+  if (pc) {
+    pc.addEventListener('signalingstatechange', trySend);
+    pc.addEventListener('connectionstatechange', trySend);
+  }
+  trySend();
+}
+
 function watchCall(call) {
   closeIncoming();
   incoming = call;
+  sendMediaProof(call);
   call.on('stream', (stream) => {
     if (incoming !== call) return;
     ui.video.srcObject = stream;
@@ -518,7 +706,8 @@ function placeholderStream() {
 
 // Quem transmite recebendo a ligação ao contrário: responde com a transmissão.
 function answerReverse(call) {
-  if (!localStream) { call.close(); return; }
+  // Só manda a transmissão para quem está na sala (quem provou a senha).
+  if (!localStream || !isMember(call.peer) || call.peer === myId) { call.close(); return; }
   closeOutgoing(call.peer);
   call.answer(localStream, { sdpTransform: tuneSdp });
   trackOutgoing(call.peer, call);
@@ -685,6 +874,7 @@ function fillApps(apps) {
 
 function renderSources() {
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.kind === sourceKind));
+  ui.screenWarn.hidden = sourceKind !== 'screen';
   const list = sources.filter((s) => (sourceKind === 'screen') === s.screen);
   if (!list.length) {
     const p = document.createElement('p');
@@ -768,14 +958,20 @@ async function captureSource(source) {
       await window.isekai.selectSource(source.id);
       return navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
     },
-    () => navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: source.id, maxWidth: quality.width, maxHeight: quality.height, maxFrameRate: 60 } },
-    }),
-    () => navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: source.id } },
-    }),
+    async () => {
+      await window.isekai.selectSource(source.id);
+      return navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: source.id, maxWidth: quality.width, maxHeight: quality.height, maxFrameRate: 60 } },
+      });
+    },
+    async () => {
+      await window.isekai.selectSource(source.id);
+      return navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: source.id } },
+      });
+    },
   ];
   let lastError = null;
   for (const attempt of attempts) {
@@ -842,14 +1038,14 @@ async function switchShare(source, pid) {
   oldTrack.onended = null;
   localStream.removeTrack(oldTrack);
   localStream.addTrack(videoTrack);
-  await Promise.all([...outgoing.values()].map((call) => {
+  await Promise.all([...outgoing.values()].filter(isVerified).map((call) => {
     const sender = senderOf(call, 'video');
     return sender ? sender.replaceTrack(videoTrack) : null;
   }));
   oldTrack.stop();
   if (pid !== audioPid) await switchAudio(pid);
   if (!localStream) return;
-  for (const call of outgoing.values()) if (call.peerConnection) tuneSenders(call.peerConnection);
+  for (const call of outgoing.values()) if (call.peerConnection && isVerified(call)) tuneSenders(call.peerConnection);
   toast('Transmissão trocada.');
 }
 
@@ -878,6 +1074,7 @@ async function switchAudio(pid) {
   const track = pipe ? pipe.track : null;
   for (const [id, call] of [...outgoing]) {
     const sender = senderOf(call, 'audio');
+    if (sender && !isVerified(call)) continue;
     if (sender) await sender.replaceTrack(track);
     // Começou "Sem som": a chamada não tem lugar para som, então só essa religa (um instante sem imagem).
     else if (track) callViewer(id);
@@ -921,11 +1118,54 @@ function callViewer(viewerId) {
   if (call) trackOutgoing(viewerId, call);
 }
 
+// Quem transmite só solta a imagem e o som depois que quem assiste provar que sabe a senha e que a conexão
+// é direta com ele. Até lá a chamada existe, mas vai vazia.
+const mediaAuth = new WeakMap(); // call -> { verified, proof }
+
+function liveTrack(kind) {
+  if (!localStream) return null;
+  return (kind === 'video' ? localStream.getVideoTracks() : localStream.getAudioTracks())[0] || null;
+}
+
+function holdMedia(call) {
+  const pc = call.peerConnection;
+  if (!pc) return;
+  for (const sender of pc.getSenders()) if (sender.track) sender.replaceTrack(null).catch(() => {});
+}
+
+async function onMediaProof(viewerId, proof) {
+  const call = outgoing.get(viewerId);
+  if (!call) return;
+  const state = mediaAuth.get(call);
+  if (!state || state.verified) return;
+  if (typeof proof === 'string') state.proof = proof;
+  const fp = fingerprints(call.peerConnection);
+  if (!fp || !state.proof) return;
+  const ok = await checkProof(state.proof, 'midia', viewerId, myId, fp.remote, fp.local).catch(() => false);
+  if (outgoing.get(viewerId) !== call || state.verified) return;
+  if (!ok) { console.warn('prova do vídeo não bateu', viewerId); closeOutgoing(viewerId); return; }
+  state.verified = true;
+  const pc = call.peerConnection;
+  for (const kind of ['video', 'audio']) {
+    const sender = senderOf(call, kind);
+    if (sender) await sender.replaceTrack(liveTrack(kind)).catch(() => {});
+  }
+  if (pc.connectionState === 'connected') tuneSenders(pc);
+}
+
+const isVerified = (call) => !!(mediaAuth.get(call) || {}).verified;
+
 function trackOutgoing(viewerId, call) {
   outgoing.set(viewerId, call);
+  mediaAuth.set(call, { verified: false, proof: null });
+  holdMedia(call);
   const pc = call.peerConnection;
-  const onState = () => { if (pc.connectionState === 'connected') tuneSenders(pc); };
+  const onState = () => {
+    if (pc.connectionState === 'connected' && isVerified(call)) tuneSenders(pc);
+    onMediaProof(viewerId);
+  };
   pc.addEventListener('connectionstatechange', onState);
+  pc.addEventListener('signalingstatechange', () => onMediaProof(viewerId));
   call.on('close', () => {
     if (outgoing.get(viewerId) === call) { outgoing.delete(viewerId); updateShareUi(); }
   });

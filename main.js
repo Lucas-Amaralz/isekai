@@ -11,10 +11,34 @@ const audioExe = app.isPackaged
 
 let win;
 let pendingSourceId = null;
+// A permissão de "vídeo" só vale nos segundos em que o Isekai está abrindo a captura da tela que a pessoa
+// escolheu. Fora disso, nenhum pedido de câmera passa (o Chromium usa a mesma permissão para os dois).
+let captureWindowUntil = 0;
 let audioProc = null;
 
-// Permite abrir duas cópias no mesmo PC para testar (cada uma com seu perfil).
-if (process.env.ISEKAI_PROFILE) app.setPath('userData', path.join(app.getPath('temp'), 'isekai-' + process.env.ISEKAI_PROFILE));
+// Permite abrir duas cópias no mesmo PC para testar (cada uma com seu perfil). Só no desenvolvimento.
+if (!app.isPackaged && /^[\w-]{1,32}$/.test(process.env.ISEKAI_PROFILE || '')) {
+  app.setPath('userData', path.join(app.getPath('temp'), 'isekai-' + process.env.ISEKAI_PROFILE));
+}
+
+// No programa instalado ninguém pode ligar a depuração por fora (ela daria acesso à tela e à transmissão).
+if (app.isPackaged && ['remote-debugging-port', 'remote-debugging-pipe', 'inspect', 'inspect-brk', 'remote-allow-origins']
+  .some((s) => app.commandLine.hasSwitch(s) || process.argv.some((a) => a.startsWith('--' + s)))) {
+  app.exit(1);
+}
+
+// Segurança: o Isekai só aceita pedidos (IPC) vindos da própria tela dele, nunca de uma página de fora.
+const pageUrl = require('url').pathToFileURL(path.join(__dirname, 'src', 'index.html')).href;
+function fromApp(event) {
+  const frame = event.senderFrame;
+  return !!(win && frame && event.sender === win.webContents && frame === win.webContents.mainFrame && frame.url.split('#')[0] === pageUrl);
+}
+function handle(channel, fn) {
+  ipcMain.handle(channel, (event, ...args) => {
+    if (!fromApp(event)) throw new Error('pedido recusado');
+    return fn(event, ...args);
+  });
+}
 
 // Modo compatibilidade: em alguns PCs a placa de vídeo (ou o driver dela) deixa a janela toda preta.
 // Quando isso acontece o Isekai liga o modo sozinho, reabre sem usar a placa e lembra disso nas próximas vezes.
@@ -39,7 +63,7 @@ const altCaptureFile = path.join(app.getPath('userData'), 'captura-alternativa')
 const altCapture = process.argv.includes('--captura-alternativa') || fs.existsSync(altCaptureFile);
 if (altCapture) app.commandLine.appendSwitch('disable-features', 'AllowWgcWindowCapturer,AllowWgcScreenCapturer');
 
-ipcMain.handle('capture-failed', async () => {
+handle('capture-failed', async () => {
   if (altCapture || !win) return 'sem-saida';
   const { response } = await dialog.showMessageBox(win, {
     type: 'question',
@@ -95,9 +119,19 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      webviewTag: false,
+      spellcheck: false,
       backgroundThrottling: false,
     },
   });
+  // O WebRTC só usa a placa de rede principal: o IP de VPN (do trabalho, por exemplo) e de outras placas não vai para a sala.
+  win.webContents.setWebRTCIPHandlingPolicy('default_public_and_private_interfaces');
+  // A janela nunca sai da tela do Isekai nem abre outras janelas (um link ou página maliciosa não leva a lugar nenhum).
+  win.webContents.on('will-navigate', (e) => e.preventDefault());
+  win.webContents.on('will-redirect', (e) => e.preventDefault());
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.loadFile(path.join(__dirname, 'src', 'index.html'));
   win.webContents.once('did-finish-load', () => setTimeout(checkWindowDrawn, 4000));
   // O título da página sobrescreveria o aviso do modo compatibilidade.
@@ -107,7 +141,20 @@ function createWindow() {
 
 // O vídeo vem da tela ou janela que a pessoa escolheu no seletor do Isekai; o som vem do IsekaiAudio.
 function setupCapture() {
-  session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
+  // Permissões: só captura de tela/som e tela cheia, e só para a tela do Isekai. Câmera, microfone, localização etc.: não.
+  const allowed = new Set(['media', 'display-capture', 'fullscreen']);
+  const isApp = (wc, url) => !!(win && wc === win.webContents && String(url || '').split('#')[0] === pageUrl);
+  session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
+    if (!isApp(wc, details.requestingUrl) || !allowed.has(permission)) return callback(false);
+    // Pedido de "media" só pode ser captura de tela, nunca câmera ou microfone.
+    if (permission === 'media' && ((details.mediaTypes || []).some((t) => t !== 'video') || Date.now() > captureWindowUntil)) return callback(false);
+    callback(true);
+  });
+  session.defaultSession.setPermissionCheckHandler((wc, permission, requestingOrigin) => (
+    allowed.has(permission) && !!wc && wc === (win && win.webContents)
+  ));
+  session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
+    if (!win || request.frame !== win.webContents.mainFrame) return callback({});
     const sources = await desktopCapturer.getSources({ types: ['screen', 'window'] });
     const source = sources.find((s) => s.id === pendingSourceId);
     pendingSourceId = null;
@@ -116,7 +163,7 @@ function setupCapture() {
   });
 }
 
-ipcMain.handle('get-sources', async () => {
+handle('get-sources', async () => {
   const sources = await desktopCapturer.getSources({
     types: ['screen', 'window'],
     thumbnailSize: { width: 320, height: 180 },
@@ -134,9 +181,13 @@ ipcMain.handle('get-sources', async () => {
     .sort((a, b) => a.black - b.black);
 });
 
-ipcMain.handle('select-source', (_e, id) => { pendingSourceId = id; });
+handle('select-source', (_e, id) => {
+  if (typeof id !== 'string' || !/^(screen|window):[\d:-]+$/.test(id)) throw new Error('fonte inválida');
+  pendingSourceId = id;
+  captureWindowUntil = Date.now() + 8000;
+});
 
-ipcMain.handle('list-apps', () => new Promise((resolve) => {
+handle('list-apps', () => new Promise((resolve) => {
   // O próprio Isekai não aparece na lista de som.
   execFile(audioExe, ['list', String(process.pid)], { windowsHide: true, timeout: 5000 }, (err, stdout) => {
     if (err) return resolve([]);
@@ -144,7 +195,10 @@ ipcMain.handle('list-apps', () => new Promise((resolve) => {
   });
 }));
 
-ipcMain.handle('start-audio', (event, pid) => new Promise((resolve) => {
+const validPid = (pid) => Number.isInteger(pid) && pid > 0 && pid < 2 ** 32;
+
+handle('start-audio', (event, pid) => new Promise((resolve) => {
+  if (!validPid(pid)) return resolve({ ok: false, error: 'programa inválido' });
   stopAudio();
   const proc = spawn(audioExe, ['capture', String(pid)], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   audioProc = proc;
@@ -168,39 +222,11 @@ ipcMain.handle('start-audio', (event, pid) => new Promise((resolve) => {
   setTimeout(() => done({ ok: true }), 1500);
 }));
 
-ipcMain.handle('stop-audio', () => { stopAudio(); });
+handle('stop-audio', () => { stopAudio(); });
 
-// Credenciais do TURN da Cloudflare (turn.json: { "keyId": "...", "apiToken": "..." }), pedidas uma vez por abertura.
-let turnCache = null;
-ipcMain.handle('ice-servers', async () => {
-  if (turnCache && turnCache.until > Date.now()) return turnCache.servers;
-  let cfg;
-  try { cfg = require('./turn.json'); } catch { return []; }
-  try {
-    const res = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${cfg.keyId}/credentials/generate-ice-servers`, {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + cfg.apiToken, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ttl: 86400 }),
-      signal: AbortSignal.timeout(6000),
-    });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
-    const list = Array.isArray(data.iceServers) ? data.iceServers : [data.iceServers];
-    // A porta 53 costuma ser bloqueada e só atrasa a conexão.
-    const servers = list
-      .map((s) => ({ ...s, urls: [].concat(s.urls).filter((u) => !/:53(\?|$)/.test(u)) }))
-      .filter((s) => s.urls.length && s.username);
-    turnCache = { servers, until: Date.now() + 12 * 3600 * 1000 };
-    return servers;
-  } catch (err) {
-    console.warn('turn', err.message);
-    return [];
-  }
-});
+handle('copy', (_e, text) => { if (typeof text === 'string' && text.length <= 2000) clipboard.writeText(text); });
 
-ipcMain.handle('copy',(_e, text) => { clipboard.writeText(text); });
-
-ipcMain.handle('set-fullscreen', (_e, on) => { if (win) win.setFullScreen(!!on); });
+handle('set-fullscreen', (_e, on) => { if (win) win.setFullScreen(!!on); });
 
 function stopAudio() {
   if (!audioProc) return;
@@ -230,6 +256,12 @@ function setupUpdates() {
   autoUpdater.checkForUpdates().catch(() => {});
   setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 4 * 60 * 60 * 1000);
 }
+
+// Nenhuma janela ou webview extra pode ser criada dentro do Isekai.
+app.on('web-contents-created', (_e, contents) => {
+  contents.on('will-attach-webview', (e) => e.preventDefault());
+  contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+});
 
 app.whenReady().then(() => {
   setupCapture();

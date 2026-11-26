@@ -2,6 +2,9 @@
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8">
+  <!-- Segurança: a página só carrega os próprios arquivos e só conversa com o servidor das salas. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; media-src 'self' blob: mediastream:; connect-src 'self' https://0.peerjs.com wss://0.peerjs.com; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+  <meta name="referrer" content="no-referrer">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0a1120">
   <link rel="manifest" href="manifest.webmanifest">
@@ -15,7 +18,7 @@
   <div id="lights" class="lights"></div>
 
   <!-- Círculo mágico, desenhado uma vez e reaproveitado -->
-  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <svg class="defs" width="0" height="0" aria-hidden="true">
     <symbol id="magic" viewBox="0 0 200 200">
       <g class="spin" fill="none" stroke="currentColor">
         <circle cx="100" cy="100" r="96" stroke-width="1"/>
@@ -46,6 +49,11 @@
       <label class="field">
         <span>Seu nome</span>
         <input id="nameInput" class="input" maxlength="24" placeholder="Como o pessoal vai te ver" autocomplete="off">
+      </label>
+
+      <label class="field">
+        <span>Senha da sala</span>
+        <input id="passInput" class="input" type="password" maxlength="128" placeholder="A senha que o pessoal combinou" autocomplete="current-password" spellcheck="false">
       </label>
 
       <button id="enterBtn" class="btn primary wide">Entrar na sala</button>
@@ -119,6 +127,7 @@
           </select>
         </label>
       </div>
+      <p id="screenWarn" class="hint warn" hidden>⚠️ Na tela inteira, tudo que aparecer nela vai para a sala: notificações do WhatsApp e do Discord, senhas, outras janelas. Para filme, prefira a aba "Janelas" e escolha só o player.</p>
       <p class="hint">Só o som desse programa vai para a sala — a voz do Discord não vaza.
         Netflix, Prime e Disney+ no navegador aparecem pretos por causa da proteção contra cópia.</p>
 

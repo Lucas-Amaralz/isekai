@@ -1,6 +1,6 @@
 {
   "name": "isekai",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Salas para assistir filme e série juntos, com o som de um programa só.",
   "main": "main.js",
   "scripts": {
@@ -15,7 +15,7 @@
     "peerjs": "^1.5.5"
   },
   "devDependencies": {
-    "electron": "^45.2.1",
+    "electron": "^45.5.0",
     "electron-builder": "^26.18.0"
   },
   "productName": "Isekai",
@@ -26,8 +26,7 @@
       "main.js",
       "preload.js",
       "src/**/*",
-      "package.json",
-      "turn.json"
+      "package.json"
     ],
     "extraResources": [
       {
@@ -67,6 +66,16 @@
         "repo": "isekai",
         "releaseType": "release"
       }
-    ]
+    ],
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "loadBrowserProcessSpecificV8Snapshot": false,
+      "grantFileProtocolExtraPrivileges": true
+    }
   }
 }

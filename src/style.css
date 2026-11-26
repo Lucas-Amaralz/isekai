@@ -351,3 +351,6 @@ body.watching .lights { display: none; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
   .lights { display: none; }
 }
+
+.defs { position: absolute; }
+.hint.warn { color: var(--rose); }

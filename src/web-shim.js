@@ -5,7 +5,6 @@ if (!window.isekai) {
     copy: async (text) => {
       try { await navigator.clipboard.writeText(text); } catch {}
     },
-    iceServers: async () => [],
     onAudio() {},
     onAudioEnded() {},
   };
